@@ -155,53 +155,127 @@ class Note:
            if P_balance >= self.principal_balance(t):
                return self.term - t
 
+LC_NOTE_URL = 'https://www.lendingclub.com/account/loanPerf.action?loan_id=%d&order_id=%d&note_id=%d'
+from urllib import urlopen
+
 class LendingClubNote(Note):
     '''
-    An extension of Note to the specifics of Lending Club note
+    An extension of Note to model the specifics of Lending Club notes
     '''
-    def __init__(self, loan_id, note_id, order_id, principal, interest, grade, term, start=dt.date.today(), fee=0.01, **kwargs):
+    def __init__(self, loan_id, note_id, order_id, principal, interest, grade, term, status, \
+                issued, start, fee=0.01, **kwargs):
         '''
-        Call: LendingClubNote(loan_id, note_id, order_id, principal, interest, term, start=dt.date.today(), fee=0.01)
+        Call: LendingClubNote(loan_id, note_id, order_id, principal, interest, grade, term, status, issued, start=dt.date.today(), fee=0.01)
         '''
         Note.__init__(self, principal, interest, term, start, fee)
         self.loan_id = loan_id
         self.note_id = note_id
         self.order_id = order_id
         self.grade = grade
+        self.issued = issued
+        self.status = status
         self.collection_log = kwargs.get('collection_log', None)
         self.payment_history = kwargs.get('payment_history', None)
         self.credit_history = kwargs.get('credit_history', None)
-        
+        self.url = LC_NOTE_URL % (loan_id, order_id, note_id)
+
     @classmethod
     def from_website(cls, loan_id, note_id, order_id, lc_browser = None):
         '''
+        Construct note from lending club's note details endpoint
 
+        Call: LendingClubNote.from_website(loan_id, note_id, order_id, lc_browser=None)
         '''
-        from urllib import urlopen
-        note_url = 'https://www.lendingclub.com/account/loanPerf.action?loan_id=%d&order_id=%d&note_id=%d' % (
-                                loan_id, order_id, note_id)
-        print 'Attempting to retrieve note details from %s' % note_url
-        if lc_browser is None:
-            lc_browser = LendingClubBrowser()
-        lc_browser.login()
-        soup = BeautifulSoup(lc_browser.browser.open(note_url).read())
-        
-        credit_history = extract_credit_history(soup)
-        collection_log = extract_collection_log(soup)
-        payment_history = extract_payment_history(soup)
-        start_date, principal, grade, interest, term = extract_note_info(soup)
-        return cls(loan_id, note_id, order_id, principal, interest, grade, term, start_date, collection_log = collection_log,
-                 credit_history = credit_history, payment_history = payment_history)
+        note_dict = parse_LC_note_webpage(loan_id, order_id, note_id, lc_browser)
+        return cls(loan_id, note_id, order_id, note_dict['principal'], note_dict['interest'], 
+                    note_dict['grade'], note_dict['term'], note_dict['status'], 
+                    note_dict['issued_date'], note_dict['start_date'], 
+                    collection_log = note_dict['collection_log'],
+                    credit_history = note_dict['credit_history'], 
+                    payment_history = note_dict['payment_history'])
+    
+    def __str__(self):
+        lc_note_str = Note.__str__(self)
+        lc_note_str += '\nGrade: %s\n' % self.grade
+        lc_note_str += 'Status: %s\n' % self.status
+        lc_note_str += 'Loan Id: %d\n' % self.loan_id
+        lc_note_str += 'OrderId: %d\n' % self.order_id
+        lc_note_str += 'Note Id: %d\n' % self.note_id
+        lc_note_str += 'URL: %s' % self.url
+        return lc_note_str
 
+class FolioFnNote(LendingClubNote):
+    '''
+    An extension of Note to model the specifics of Lending Club secondary market notes
+    '''
+    def __init__(self, loan_id, note_id, order_id, principal, interest, grade, term, status, \
+                            issued, start, out_principal, acc_interest, ask_price, \
+                            date_listed, never_late, fee=0.01, **kwargs):
+
+        LendingClubNote.__init__(self, loan_id, note_id, order_id, principal, interest, grade,\
+                                term, status, issued, start, fee, **kwargs)
+        self.out_principal = out_principal
+        self.acc_interest = acc_interest
+        self.ask_price = ask_price
+        self.date_listed = date_listed
+        self.never_late = never_late
+    
+    @classmethod
+    def from_website(cls, loan_id, note_id, order_id, out_principal, acc_interest,\
+                    ask_price, date_listed, never_late, lc_browser = None):
+        
+        note_dict = parse_LC_note_webpage(loan_id, order_id, note_id, lc_browser)$
+        
+        return cls(loan_id, note_id, order_id, 
+                    note_dict['principal'], note_dict['interest'], $
+                    note_dict['grade'], note_dict['term'], note_dict['status'], $
+                    note_dict['issued_date'], note_dict['start_date'], 
+                    
+                    collection_log = note_dict['collection_log'],$
+                    credit_history = note_dict['credit_history'], $
+                    payment_history = note_dict['payment_history'])
+
+
+class Portfolio(list):
+    pass
+
+class LendingClubPortfolio(Portfolio):
+    pass
+
+# ------------------------------------------------------------------
+#
+# Lending Club Note webpage parsing
+#
+# ------------------------------------------------------------------
+
+def parse_LC_note_webpage(loan_id, order_id, note_id, lc_browser=None):
+    url = LC_NOTE_URL % (loan_id, order_id, note_id)
+    print 'Attempting to retrieve note details from %s' % url
+    if lc_browser is None:
+        lc_browser = LendingClubBrowser()
+    lc_browser.login()
+    soup = BeautifulSoup(lc_browser.browser.open(url).read())
+    credit_history = extract_credit_history(soup)
+    collection_log = extract_collection_log(soup)
+    payment_history = extract_payment_history(soup)
+    issued_date, principal, grade, interest, term, status = extract_note_info(soup)
+    start_date = issued_date + datetime.timedelta(calendar.monthrange(issued_date.year, 
+                                                                        issued_date.month)[1])
+    return {'principal' :principal, 'interest': interest, 'grade': grade, 'term': term, 
+            'status': status, 'issued_date': issued_date, 'start_date': start_date,
+            'collecation_log': collection_log, 'credit_history': credit_history,
+            'payment_history': payment_history}
 
 def extract_note_info(soup):
-    note_details = [extract_row(r) for a in soup.findAll('div', {'id': 'object-details'}) for r in a.findAll('table')][0]  
+    note_details = [extract_row(r) for a in soup.findAll('div', {'id': 'object-details'}) \
+                    for r in a.findAll('table')][0]  
     start_date = parsedate(note_details[0])
-    principal = int(note_details[1].split('$')[1])
+    principal = int(re.sub(',', '', note_details[1].split('$')[1]))
     grade = note_details[3].split('&nbsp;:&nbsp;')[0]
     interest = float(re.sub('%', '', note_details[3].split('&nbsp;:&nbsp;')[1]))
     term = int(note_details[4].split('&nbsp;&nbsp;')[0])
-    return start_date, principal, grade, interest, term
+    status = note_details[5]
+    return start_date, principal, grade, interest, term, status
 
 
 
