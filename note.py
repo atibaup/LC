@@ -2,8 +2,20 @@ import datetime as dt
 import calendar
 from dateutil.relativedelta import relativedelta
 import sys
-sys.path.append('/Users/apuig/Documents/Projects/lendingclubchecker')
+from urllib import urlopen
+
+# external modules
+sys.path.append('../lendingclubchecker')
 from lendingclub import *
+
+# Constants
+LC_NOTE_URL = 'https://www.lendingclub.com/account/loanPerf.action?loan_id=%d&order_id=%d&note_id=%d'
+
+#--------------------------------------------------------------------------------
+#
+# Note, LendingClubNote and FolioFnNote
+#
+#--------------------------------------------------------------------------------
 
 class Note:
    def __init__(self, principal, interest, term, start=dt.date.today(), fee=0.01):
@@ -155,9 +167,6 @@ class Note:
            if P_balance >= self.principal_balance(t):
                return self.term - t
 
-LC_NOTE_URL = 'https://www.lendingclub.com/account/loanPerf.action?loan_id=%d&order_id=%d&note_id=%d'
-from urllib import urlopen
-
 class LendingClubNote(Note):
     '''
     An extension of Note to model the specifics of Lending Club notes
@@ -224,17 +233,130 @@ class FolioFnNote(LendingClubNote):
     def from_website(cls, loan_id, note_id, order_id, out_principal, acc_interest,\
                     ask_price, date_listed, never_late, lc_browser = None):
         
-        note_dict = parse_LC_note_webpage(loan_id, order_id, note_id, lc_browser)$
+        note_dict = parse_LC_note_webpage(loan_id, order_id, note_id, lc_browser)
         
         return cls(loan_id, note_id, order_id, 
-                    note_dict['principal'], note_dict['interest'], $
-                    note_dict['grade'], note_dict['term'], note_dict['status'], $
-                    note_dict['issued_date'], note_dict['start_date'], 
-                    
-                    collection_log = note_dict['collection_log'],$
-                    credit_history = note_dict['credit_history'], $
+                    note_dict['principal'], note_dict['interest'],
+                    note_dict['grade'], note_dict['term'], note_dict['status'],
+                    note_dict['issued_date'], note_dict['start_date'],
+		    out_principal, acc_interest, ask_price, date_listed, never_late, 
+                    collection_log = note_dict['collection_log'],
+                    credit_history = note_dict['credit_history'],
                     payment_history = note_dict['payment_history'])
 
+    def __str__(self):
+        lc_note_str = Note.__str__(self)
+        lc_note_str += '\nGrade: %s\n' % self.grade
+        lc_note_str += 'Status: %s\n' % self.status
+        lc_note_str += 'Loan Id: %d\n' % self.loan_id
+        lc_note_str += 'OrderId: %d\n' % self.order_id
+        lc_note_str += 'Note Id: %d\n' % self.note_id
+        lc_note_str += 'URL: %s\n' % self.url
+	lc_note_str += 'Outstanding Principal: %.2f\n' % self.out_principal
+	lc_note_str += 'Acc. Interest: %.2f\n' % self.acc_interest
+	lc_note_str += 'Ask Price: %.2f\n' % self.ask_price
+	lc_note_str += 'Date Listed: %s\n' % self.date_listed
+	lc_note_str += 'Never Late: %s\n' % self.never_late
+	return lc_note_str
+
+#--------------------------------------------------------------------------------
+#
+# Sets of notes and portfolios
+#
+#--------------------------------------------------------------------------------
+
+class LendingClubNoteSet(list):
+   '''
+   Set of Lending Club Notes
+   ''' 
+   def __init__(self, lc_notes_args, lc_notes_kwargs, fee = 0.01, **kwargs):
+       list.__init__(self, [LendingClubNote(*n, **k) for n, k in zip(lc_notes_args, lc_notes_kwargs)])
+
+   @classmethod
+   def from_website(cls, lc_notes_ids, fee = 0.01, **kwargs):
+       '''
+       lc_notes_ids: list of (loan_id, order_id, note_id)
+       fee: double
+       '''
+       lc_browser = LendingClubBrowser()
+       lc_notes_args = []
+       lc_notes_kwargs = []
+       for loan_id, order_id, note_id in lc_notes_ids:
+           note_dict = parse_LC_note_webpage(loan_id, order_id, note_id, lc_browser)
+           lc_notes_args.append((loan_id, note_id, order_id, note_dict['principal'], note_dict['interest'],
+                    			note_dict['grade'], note_dict['term'], note_dict['status'],
+                    			note_dict['issued_date'], note_dict['start_date']))
+           lc_notes_kwargs.append({'collection_log': note_dict['collection_log'],
+                    		   'credit_history': note_dict['credit_history'],
+                    		   'payment_history': note_dict['payment_history'],
+                                   'fee': fee})
+       return cls(lc_notes_args, lc_notes_kwargs, **kwargs) 
+  
+   def __str__(self):
+       self_str = ''
+       for n in self:
+           self_str += '%s\n' % n
+       return self_str
+
+   def __repr__(self):
+       return str(self) 
+
+class FolioFnNoteSet(list):
+   '''
+   Set of Folio Fn Notes
+   '''
+   def __init__(self, fn_notes_args, fn_notes_kwargs, fee = 0.01, **kwargs):
+       list.__init__(self, [FolioFnNote(*n, **k) for n, k in zip(fn_notes_args, fn_notes_kwargs)])
+
+   @classmethod
+   def from_website(cls, lc_notes_ids, fn_notes_data, fee = 0.01, **kwargs):
+       '''
+       lc_notes_ids: list of (loan_id, order_id, note_id)
+       fn_notes_data: list of (out_principal, acc_interest, ask_price, date_listed, never_late)
+       fee: double
+       '''
+       lc_browser = LendingClubBrowser()
+       lc_notes_args = []
+       lc_notes_kwargs = []
+       for ids, data in zip(lc_notes_ids, fn_notes_data):
+           loan_id, order_id, note_id = ids
+           out_principal, acc_interest, ask_price, date_listed, never_late = data
+           note_dict = parse_LC_note_webpage(loan_id, order_id, note_id, lc_browser)
+           lc_notes_args.append((loan_id, note_id, order_id, note_dict['principal'], note_dict['interest'],
+                    			note_dict['grade'], note_dict['term'], note_dict['status'],
+                    			note_dict['issued_date'], note_dict['start_date'],
+                                        out_principal, acc_interest, ask_price, 
+                                        date_listed, never_late))
+           lc_notes_kwargs.append({'collection_log': note_dict['collection_log'],
+                    		   'credit_history': note_dict['credit_history'],
+                    		   'payment_history': note_dict['payment_history'],
+                                   'fee': fee})
+       return cls(lc_notes_args, lc_notes_kwargs, **kwargs) 
+ 
+   @classmethod
+   def from_csv_file(cls, file_name, max_rows=10):
+       '''
+       file_name: string
+       '''
+       with open(file_name, 'r') as f:
+           headers = f.readline()
+           lc_notes_ids, fn_notes_data = [], []
+           for i, row in enumerate(f):
+              row = row.replace('"','').split(',')
+              lc_notes_ids.append((int(row[0]), int(row[2]), int(row[1])))
+              fn_notes_data.append((float(row[3]), float(row[4]), float(row[6]), row[12], row[13]))
+              if i == max_rows: break
+       return cls.from_website(lc_notes_ids, fn_notes_data)
+              
+ 
+   def __str__(self):
+       self_str = ''
+       for n in self:
+           self_str += '%s\n' % n
+       return self_str
+
+   def __repr__(self):
+       return str(self) 
 
 class Portfolio(list):
     pass
@@ -252,6 +374,7 @@ def parse_LC_note_webpage(loan_id, order_id, note_id, lc_browser=None):
     url = LC_NOTE_URL % (loan_id, order_id, note_id)
     print 'Attempting to retrieve note details from %s' % url
     if lc_browser is None:
+        print 'Opening new LendingClubBrowser...'
         lc_browser = LendingClubBrowser()
     lc_browser.login()
     soup = BeautifulSoup(lc_browser.browser.open(url).read())
@@ -263,7 +386,7 @@ def parse_LC_note_webpage(loan_id, order_id, note_id, lc_browser=None):
                                                                         issued_date.month)[1])
     return {'principal' :principal, 'interest': interest, 'grade': grade, 'term': term, 
             'status': status, 'issued_date': issued_date, 'start_date': start_date,
-            'collecation_log': collection_log, 'credit_history': credit_history,
+            'collection_log': collection_log, 'credit_history': credit_history,
             'payment_history': payment_history}
 
 def extract_note_info(soup):
